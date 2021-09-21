@@ -77,7 +77,7 @@ def run_model_img(args, frame, model):
 # drawing prediction on image
 
 
-def draw_pred(args, frame, pred, fps_frame):
+def draw_pred(args, frame, prediction, fps_frame):
     height, width, _ = frame.shape
     if prediction == 1:
         if args.image or args.webcam:
