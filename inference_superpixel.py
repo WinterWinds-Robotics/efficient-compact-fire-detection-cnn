@@ -52,7 +52,7 @@ def data_transform(model):
 # read/process superpixel
 
 
-def proc_sp(small_frame, np_transforms):
+def proc_sp(small_frame, np_transforms, device):
     # small_frame = cv2.resize(frame, (224, 224), cv2.INTER_AREA)
     small_frame = Image.fromarray(small_frame)
     small_frame = np_transforms(small_frame).float()
@@ -121,7 +121,7 @@ def process_sp(args, small_frame, np_transforms, model):
 
         # PIL centre crop and data transformation
         # superpixel = pil_crop(superpixel)
-        superpixel = proc_sp(superpixel, np_transforms)
+        superpixel = proc_sp(superpixel, np_transforms, device)
 
         # model prediction
         prediction = run_model_img(args, superpixel, model)
@@ -131,243 +131,244 @@ def process_sp(args, small_frame, np_transforms, model):
 
 
 ##########################################################################
-# parse command line arguments
-parser = argparse.ArgumentParser()
-parser.add_argument("--image",
-                    help="Path to image file or image directory")
-parser.add_argument("--video",
-                    help="Path to video file or video directory")
-parser.add_argument(
-    "--webcam",
-    action="store_true",
-    help="Take inputs from webcam")
-parser.add_argument(
-    "--camera_to_use",
-    type=int,
-    default=0,
-    help="Specify camera to use for webcam option")
-parser.add_argument("--trt",
-                    action="store_true",
-                    help="Model run on TensorRT")
-parser.add_argument(
-    "--model",
-    default='shufflenetonfire',
-    help="Select the model {shufflenetonfire, nasnetonfire}")
-parser.add_argument("--weight", help="Model weight file path")
-parser.add_argument(
-    "--cpu",
-    action="store_true",
-    help="If selected will run on CPU")
-parser.add_argument(
-    "--output",
-    help="A directory to save output visualizations."
-    "If not given , will show output in an OpenCV window.")
-parser.add_argument(
-    "-fs",
-    "--fullscreen",
-    action='store_true',
-    help="run in full screen mode")
-args = parser.parse_args()
-print(f'\n{args}')
-##########################################################################
+if __name__ == '__main__':
+    # parse command line arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--image",
+                        help="Path to image file or image directory")
+    parser.add_argument("--video",
+                        help="Path to video file or video directory")
+    parser.add_argument(
+        "--webcam",
+        action="store_true",
+        help="Take inputs from webcam")
+    parser.add_argument(
+        "--camera_to_use",
+        type=int,
+        default=0,
+        help="Specify camera to use for webcam option")
+    parser.add_argument("--trt",
+                        action="store_true",
+                        help="Model run on TensorRT")
+    parser.add_argument(
+        "--model",
+        default='shufflenetonfire',
+        help="Select the model {shufflenetonfire, nasnetonfire}")
+    parser.add_argument("--weight", help="Model weight file path")
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="If selected will run on CPU")
+    parser.add_argument(
+        "--output",
+        help="A directory to save output visualizations."
+        "If not given , will show output in an OpenCV window.")
+    parser.add_argument(
+        "-fs",
+        "--fullscreen",
+        action='store_true',
+        help="run in full screen mode")
+    args = parser.parse_args()
+    print(f'\n{args}')
+    ##########################################################################
 
-# define display window name
+    # define display window name
 
-WINDOW_NAME = 'Detection'
+    WINDOW_NAME = 'Detection'
 
-# uses cuda if available
-if args.cpu:
-    device = torch.device('cpu')
-else:
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
-if args.cpu and args.trt:
-    print(f'\n>>>>TensorRT runs only on gpu. Exit.')
-    exit()
-
-print('\n\nBegin {fire, no-fire} superpixel localisation :')
-
-# model load
-if args.model == "shufflenetonfire":
-    model = shufflenetv2.shufflenet_v2_x0_5(
-        pretrained=False, layers=[
-            4, 8, 4], output_channels=[
-            24, 48, 96, 192, 64], num_classes=1)
-    if args.weight:
-        w_path = args.weight
+    # uses cuda if available
+    if args.cpu:
+        device = torch.device('cpu')
     else:
-        w_path = './weights/shufflenet_sp.pt'
-    model.load_state_dict(torch.load(w_path, map_location=device))
-elif args.model == "nasnetonfire":
-    model = nasnet_mobile_onfire.nasnetamobile(num_classes=1, pretrained=False)
-    if args.weight:
-        w_path = args.weight
-    else:
-        w_path = './weights/nasnet_sp.pt'
-    model.load_state_dict(torch.load(w_path, map_location=device))
-else:
-    print('Invalid Model.')
-    exit()
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-# apply data transform
-np_transforms = data_transform(args.model)
+    if args.cpu and args.trt:
+        print(f'\n>>>>TensorRT runs only on gpu. Exit.')
+        exit()
 
-print(f'|__Model loading: {args.model}')
+    print('\n\nBegin {fire, no-fire} superpixel localisation :')
 
-model.eval()
-model.to(device)
-
-# TensorRT conversion
-if args.trt:
-    from torch2trt import TRTModule
-    from torch2trt import torch2trt
-    data = torch.randn((1, 3, 224, 224)).float().to(device)
-    model_trt = torch2trt(model, [data], int8_mode=True)
-    model_trt.to(device)
-    print(f'\t|__TensorRT activated.')
-
-# load and process input image directory or image file
-if args.image:
-
-    # list image from a directory or file
-    if os.path.isdir(args.image):
-        lst_img = [os.path.join(args.image, file)
-                   for file in os.listdir(args.image)]
-    if os.path.isfile(args.image):
-        lst_img = [args.image]
-
-    if args.output:
-        os.makedirs(args.output, exist_ok=True)
-
-    fps = []
-    # start processing image
-    for im in lst_img:
-        print('\t|____Image processing: ', im)
-
-        frame = cv2.imread(im)
-        height, width, _ = frame.shape
-        small_frame = cv2.resize(frame, (224, 224), cv2.INTER_AREA)
-
-        # Prediction on superpixel
-        if args.trt:
-            process_sp(args, small_frame, np_transforms, model_trt)
+    # model load
+    if args.model == "shufflenetonfire":
+        model = shufflenetv2.shufflenet_v2_x0_5(
+            pretrained=False, layers=[
+                4, 8, 4], output_channels=[
+                24, 48, 96, 192, 64], num_classes=1)
+        if args.weight:
+            w_path = args.weight
         else:
-            process_sp(args, small_frame, np_transforms, model)
+            w_path = './weights/shufflenet_sp.pt'
+        model.load_state_dict(torch.load(w_path, map_location=device))
+    elif args.model == "nasnetonfire":
+        model = nasnet_mobile_onfire.nasnetamobile(num_classes=1, pretrained=False)
+        if args.weight:
+            w_path = args.weight
+        else:
+            w_path = './weights/nasnet_sp.pt'
+        model.load_state_dict(torch.load(w_path, map_location=device))
+    else:
+        print('Invalid Model.')
+        exit()
 
-        small_frame = cv2.resize(small_frame, (width, height), cv2.INTER_AREA)
-        # save prdiction visualisation in output path
+    # apply data transform
+    np_transforms = data_transform(args.model)
+
+    print(f'|__Model loading: {args.model}')
+
+    model.eval()
+    model.to(device)
+
+    # TensorRT conversion
+    if args.trt:
+        from torch2trt import TRTModule
+        from torch2trt import torch2trt
+        data = torch.randn((1, 3, 224, 224)).float().to(device)
+        model_trt = torch2trt(model, [data], int8_mode=True)
+        model_trt.to(device)
+        print(f'\t|__TensorRT activated.')
+
+    # load and process input image directory or image file
+    if args.image:
+
+        # list image from a directory or file
+        if os.path.isdir(args.image):
+            lst_img = [os.path.join(args.image, file)
+                       for file in os.listdir(args.image)]
+        if os.path.isfile(args.image):
+            lst_img = [args.image]
+
         if args.output:
-            f_name = os.path.basename(im)
-            cv2.imwrite(f'{args.output}/{f_name}', small_frame)
+            os.makedirs(args.output, exist_ok=True)
 
-        # display prdiction if output path is not provided
-        # press space key to continue/next
+        fps = []
+        # start processing image
+        for im in lst_img:
+            print('\t|____Image processing: ', im)
+
+            frame = cv2.imread(im)
+            height, width, _ = frame.shape
+            small_frame = cv2.resize(frame, (224, 224), cv2.INTER_AREA)
+
+            # Prediction on superpixel
+            if args.trt:
+                process_sp(args, small_frame, np_transforms, model_trt)
+            else:
+                process_sp(args, small_frame, np_transforms, model)
+
+            small_frame = cv2.resize(small_frame, (width, height), cv2.INTER_AREA)
+            # save prdiction visualisation in output path
+            if args.output:
+                f_name = os.path.basename(im)
+                cv2.imwrite(f'{args.output}/{f_name}', small_frame)
+
+            # display prdiction if output path is not provided
+            # press space key to continue/next
+            else:
+                cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+                cv2.imshow(WINDOW_NAME, small_frame)
+                cv2.waitKey(0)
+
+    # load and process input video file or webcam stream
+    if args.video or args.webcam:
+        # define video capture object
+        try:
+            # to use a non-buffered camera stream (via a separate thread)
+            if not(args.video):
+                from models import camera_stream
+                cap = camera_stream.CameraVideoStream()
+            else:
+                cap = cv2.VideoCapture()  # not needed for video files
+
+        except BaseException:
+            # if not then just use OpenCV default
+            print("INFO: camera_stream class not found - camera input may be buffered")
+            cap = cv2.VideoCapture()
+
+        if args.output:
+            os.makedirs(args.output, exist_ok=True)
         else:
             cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-            cv2.imshow(WINDOW_NAME, small_frame)
-            cv2.waitKey(0)
 
-# load and process input video file or webcam stream
-if args.video or args.webcam:
-    # define video capture object
-    try:
-        # to use a non-buffered camera stream (via a separate thread)
-        if not(args.video):
-            from models import camera_stream
-            cap = camera_stream.CameraVideoStream()
-        else:
-            cap = cv2.VideoCapture()  # not needed for video files
-
-    except BaseException:
-        # if not then just use OpenCV default
-        print("INFO: camera_stream class not found - camera input may be buffered")
-        cap = cv2.VideoCapture()
-
-    if args.output:
-        os.makedirs(args.output, exist_ok=True)
-    else:
-        cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-
-    if args.video:
-        if os.path.isdir(args.video):
-            lst_vid = [os.path.join(args.video, file)
-                       for file in os.listdir(args.video)]
-        if os.path.isfile(args.video):
-            lst_vid = [args.video]
-    if args.webcam:
-        lst_vid = [args.camera_to_use]
-
-    # read from video file(s) or webcam
-    for vid in lst_vid:
-        keepProcessing = True
         if args.video:
-            print('\t|____Video processing: ', vid)
+            if os.path.isdir(args.video):
+                lst_vid = [os.path.join(args.video, file)
+                           for file in os.listdir(args.video)]
+            if os.path.isfile(args.video):
+                lst_vid = [args.video]
         if args.webcam:
-            print('\t|____Webcam processing: ')
-        if cap.open(vid):
-            # get video information
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
+            lst_vid = [args.camera_to_use]
+
+        # read from video file(s) or webcam
+        for vid in lst_vid:
+            keepProcessing = True
+            if args.video:
+                print('\t|____Video processing: ', vid)
+            if args.webcam:
+                print('\t|____Webcam processing: ')
+            if cap.open(vid):
+                # get video information
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                fps = cap.get(cv2.CAP_PROP_FPS)
+
+                if args.output and args.video:
+                    f_name = os.path.basename(vid)
+                    out = cv2.VideoWriter(
+                        filename=f'{args.output}/{f_name}',
+                        fourcc=cv2.VideoWriter_fourcc(*'mp4v'),
+                        fps=float(fps),
+                        frameSize=(width, height),
+                        isColor=True,
+                    )
+
+                while (keepProcessing):
+                    # start a timer (to see how long processing and display takes)
+                    start_tik = cv2.getTickCount()
+
+                    # if camera/video file successfully open then read frame
+                    if (cap.isOpened):
+                        ret, frame = cap.read()
+                        # when we reach the end of the video (file) exit cleanly
+                        if (ret == 0):
+                            keepProcessing = False
+                            continue
+
+                    small_frame = cv2.resize(frame, (224, 224), cv2.INTER_AREA)
+
+                    # Prediction on superpixel
+                    if args.trt:
+                        process_sp(args, small_frame, np_transforms, model_trt)
+                    else:
+                        process_sp(args, small_frame, np_transforms, model)
+
+                    small_frame = cv2.resize(
+                        small_frame, (width, height), cv2.INTER_AREA)
+
+                    # save prdiction visualisation in output path
+                    # only for video input, not for webcam input
+                    if args.output and args.video:
+                        out.write(small_frame)
+
+                    # display prdiction if output path is not provided
+                    else:
+                        cv2.imshow(WINDOW_NAME, small_frame)
+                        cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN,
+                                              cv2.WINDOW_FULLSCREEN & args.fullscreen)
+
+                        stop_tik = ((cv2.getTickCount() - start_tik) /
+                                    cv2.getTickFrequency()) * 1000
+                        key = cv2.waitKey(
+                            max(2, 40 - int(math.ceil(stop_tik)))) & 0xFF
+
+                        # press "x" for exit  / press "f" for fullscreen
+                        if (key == ord('x')):
+                            keepProcessing = False
+                        elif (key == ord('f')):
+                            args.fullscreen = not(args.fullscreen)
 
             if args.output and args.video:
-                f_name = os.path.basename(vid)
-                out = cv2.VideoWriter(
-                    filename=f'{args.output}/{f_name}',
-                    fourcc=cv2.VideoWriter_fourcc(*'mp4v'),
-                    fps=float(fps),
-                    frameSize=(width, height),
-                    isColor=True,
-                )
+                out.release()
+            else:
+                cv2.destroyAllWindows()
 
-            while (keepProcessing):
-                # start a timer (to see how long processing and display takes)
-                start_tik = cv2.getTickCount()
-
-                # if camera/video file successfully open then read frame
-                if (cap.isOpened):
-                    ret, frame = cap.read()
-                    # when we reach the end of the video (file) exit cleanly
-                    if (ret == 0):
-                        keepProcessing = False
-                        continue
-
-                small_frame = cv2.resize(frame, (224, 224), cv2.INTER_AREA)
-
-                # Prediction on superpixel
-                if args.trt:
-                    process_sp(args, small_frame, np_transforms, model_trt)
-                else:
-                    process_sp(args, small_frame, np_transforms, model)
-
-                small_frame = cv2.resize(
-                    small_frame, (width, height), cv2.INTER_AREA)
-
-                # save prdiction visualisation in output path
-                # only for video input, not for webcam input
-                if args.output and args.video:
-                    out.write(small_frame)
-
-                # display prdiction if output path is not provided
-                else:
-                    cv2.imshow(WINDOW_NAME, small_frame)
-                    cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN,
-                                          cv2.WINDOW_FULLSCREEN & args.fullscreen)
-
-                    stop_tik = ((cv2.getTickCount() - start_tik) /
-                                cv2.getTickFrequency()) * 1000
-                    key = cv2.waitKey(
-                        max(2, 40 - int(math.ceil(stop_tik)))) & 0xFF
-
-                    # press "x" for exit  / press "f" for fullscreen
-                    if (key == ord('x')):
-                        keepProcessing = False
-                    elif (key == ord('f')):
-                        args.fullscreen = not(args.fullscreen)
-
-        if args.output and args.video:
-            out.release()
-        else:
-            cv2.destroyAllWindows()
-
-print('\n[Done]\n')
+    print('\n[Done]\n')
